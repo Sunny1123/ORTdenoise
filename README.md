@@ -1,6 +1,5 @@
 # benchmark_denoise
 
-benchmark_denoise
 ## Benchmark denoising on first channel with Gaussian noise
 
 **Usage:**
@@ -39,8 +38,6 @@ Benchmark denoising on first channel with Gaussian noise
 
 # demo2d
 
-demo2d
-## Title demo2d
 Demonstrates denoising performance on simple 2d test image
 
 **Usage:**
@@ -75,8 +72,6 @@ demo2d(size=256,sigma=0.1,smband=10,tolmult=0.001)
 
 # demo3d
 
-demo3d
-## Title demo3d
 Demo denoising on 3D images in 0-1 scale
 
 **Usage:**
@@ -129,8 +124,6 @@ demo3d(size=c(128,128,128),sigma=0.1,smband=4,tolmult=0.01,margin=0.05,slice_idx
 
 # demo3diter
 
-demo3diter
-## Title demo3diter
 Multiple iterations of 3D demo
 
 **Usage:**
@@ -188,9 +181,6 @@ demo3diter(image=128,sigma=0.1,smband=4,tolmult=0.01,margin=0.05,slice_idx=NULL,
 ---
 
 # smoothimage
-
-smoothimage
-## Title smoothimage
 
 **Usage:**
 ```
