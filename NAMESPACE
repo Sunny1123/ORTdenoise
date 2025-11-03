@@ -1,0 +1,10 @@
+exportPattern("^[[:alpha:]]+")
+import(RcppParallel)
+import(RcppArmadillo)
+import(ggplot2)
+import(gridExtra)
+import(R.matlab)
+import(base64enc)
+import(nloptr)
+useDynLib(dentree, .registration = TRUE)
+

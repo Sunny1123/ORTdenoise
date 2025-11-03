@@ -1,0 +1,454 @@
+// // [[Rcpp::depends(RcppParallel)]]
+// // [[Rcpp::plugins(cpp17)]]
+// #include <Rcpp.h>
+// #include <RcppParallel.h>
+// #include <cmath>
+// #include <vector>
+// #include <numeric>
+// #include <algorithm>
+// #include <atomic>
+// #include <unordered_map>
+// #include <string>
+//
+// using namespace Rcpp;
+// using namespace RcppParallel;
+//
+// // ==========================================================
+// // Helpers
+// // ==========================================================
+// inline int ravel_index(const std::vector<int>& coords,
+//                        const std::vector<int>& dims) {
+//   int idx = 0, mult = 1;
+//   for (size_t k = 0; k < dims.size(); ++k) {
+//     idx += coords[k] * mult;
+//     mult *= dims[k];
+//   }
+//   return idx;
+// }
+//
+// struct Lookup {
+//   std::vector<double> exp_table;
+//   double step_ratio;
+//   int n_ratio;
+//   int smband;
+//
+//   Lookup(double maxRatio, int nSteps, int smband_)
+//     : step_ratio(nSteps > 1 ? maxRatio / (nSteps - 1) : 1.0),
+//       n_ratio(std::max(1, nSteps)),
+//       smband(smband_) {
+//     exp_table.resize(n_ratio);
+//     for (int i = 0; i < n_ratio; ++i)
+//       exp_table[i] = std::exp(-i * step_ratio);
+//   }
+//
+//   inline double getExp(double ratio) const {
+//     if (ratio <= 0) return 1.0;
+//     if (step_ratio <= 0) return std::exp(-ratio);
+//     int idx = (int)(ratio / step_ratio);
+//     if (idx < 0) idx = 0;
+//     if (idx >= n_ratio) idx = n_ratio - 1;
+//     return exp_table[idx];
+//   }
+//
+//   inline double getDist2(const std::vector<int>& a,
+//                          const std::vector<int>& b) const {
+//     int d2 = 0;
+//     for (size_t k = 0; k < a.size(); ++k) {
+//       int diff = a[k] - b[k];
+//       d2 += diff * diff;
+//     }
+//     if (d2 > smband * smband) return -1.0;
+//     return std::sqrt((double)d2);
+//   }
+// };
+//
+// // ==========================================================
+// // Pixel-level Worker
+// // ==========================================================
+// struct PixelWorker : public RcppParallel::Worker {
+//   const RVector<double> img;
+//   const std::vector<std::vector<int>>& pixel_coords;
+//   const std::vector<int>& pixel_nodes; // node assignment for each pixel
+//   const std::vector<int>& dims;
+//   Lookup lookup;
+//   RVector<double> output;
+//
+//   PixelWorker(const NumericVector& img_,
+//               const std::vector<std::vector<int>>& pixel_coords_,
+//               const std::vector<int>& pixel_nodes_,
+//               const std::vector<int>& dims_,
+//               const Lookup& lookup_,
+//               NumericVector& output_)
+//     : img(img_), pixel_coords(pixel_coords_), pixel_nodes(pixel_nodes_),
+//       dims(dims_), lookup(lookup_), output(output_) {}
+//
+//   void operator()(std::size_t begin, std::size_t end) {
+//     const double eps = 1e-12;
+//     for (std::size_t idx = begin; idx < end; ++idx) {
+//       const auto& ci = pixel_coords[idx];
+//       int node_id = pixel_nodes[idx];
+//       double centerVal = img[idx];
+//
+//       double temp = 0.0;
+//       double count = 0.0;
+//
+//       // Loop over local neighborhood
+//       int p = ci.size();
+//       // Generate neighborhood cube [-smband, smband] in each dim
+//       std::vector<int> neighbor_coords(p);
+//       std::function<void(int)> recurse;
+//       recurse = [&](int dim) {
+//         if (dim == p) {
+//           int lin_idx = ravel_index(neighbor_coords, dims);
+//           if (lin_idx == idx) return;  // skip self
+//           if (pixel_nodes[lin_idx] != node_id) return; // different node
+//
+//           double dist = lookup.getDist2(ci, neighbor_coords);
+//           if (dist < eps) return;
+//
+//           double diff = std::abs(img[lin_idx] - centerVal);
+//           double ratio =10* diff / dist;
+//           double wt = lookup.getExp(ratio);
+//           if (wt < 1e-12) return;
+//
+//           temp += img[lin_idx] * wt;
+//           count += wt;
+//           return;
+//         }
+//
+//         int start = std::max(0, ci[dim] - lookup.smband);
+//         int end_ = std::min(dims[dim]-1, ci[dim] + lookup.smband);
+//         for (int d = start; d <= end_; ++d) {
+//           neighbor_coords[dim] = d;
+//           recurse(dim + 1);
+//         }
+//       };
+//
+//       recurse(0);
+//       output[idx] = (count > 0 ? temp / count : centerVal);
+//     }
+//   }
+// };
+//
+// // ==========================================================
+// // Exported function
+// // ==========================================================
+// // [[Rcpp::export]]
+// NumericVector TreetomatPixelSIMD(List tree,
+//                                  NumericVector img,
+//                                  IntegerVector dims,
+//                                  double smband,
+//                                  int nSteps = 10000) {
+//   std::vector<int> dims_vec = as<std::vector<int>>(dims);
+//   int N = std::accumulate(dims_vec.begin(), dims_vec.end(), 1, std::multiplies<int>());
+//   if (img.size() != N) stop("Image size does not match dims");
+//
+//   NumericVector output(N);
+//   double imgMin = *std::min_element(img.begin(), img.end());
+//   double imgMax = *std::max_element(img.begin(), img.end());
+//   double maxRatio = 10*(imgMax - imgMin);
+//
+//   Lookup lookup(maxRatio, nSteps, (int)std::ceil(smband));
+//
+//   // Precompute coordinates and node assignments for all pixels
+//   std::vector<std::vector<int>> pixel_coords(N);
+//   std::vector<int> pixel_nodes(N, -1);
+//
+//   for (int nodeIdx = 0; nodeIdx < tree.size(); ++nodeIdx) {
+//     List node = tree[nodeIdx];
+//     IntegerMatrix node_coords = node["coord"];
+//     for (int i = 0; i < node_coords.nrow(); ++i) {
+//       std::vector<int> coords(dims_vec.size());
+//       for (size_t d = 0; d < dims_vec.size(); ++d)
+//         coords[d] = node_coords(i, d+1) - 1;
+//       int lin_idx = ravel_index(coords, dims_vec);
+//       pixel_coords[lin_idx] = coords;
+//       pixel_nodes[lin_idx] = nodeIdx;
+//     }
+//   }
+//
+//   PixelWorker worker(img, pixel_coords, pixel_nodes, dims_vec, lookup, output);
+//   parallelFor(0, N, worker);
+//   return output;
+// }
+// [[Rcpp::depends(RcppParallel)]]
+// [[Rcpp::plugins(cpp17)]]
+#include <Rcpp.h>
+#include <RcppParallel.h>
+#include <cmath>
+#include <vector>
+#include <numeric>
+#include <algorithm>
+#include <functional>
+
+using namespace Rcpp;
+using namespace RcppParallel;
+
+// ==========================================================
+// Helpers (keep same ravel_index behavior as your original code)
+// ==========================================================
+inline int ravel_index(const std::vector<int>& coords,
+                       const std::vector<int>& dims) {
+  int idx = 0, mult = 1;
+  for (size_t k = 0; k < dims.size(); ++k) {
+    idx += coords[k] * mult;
+    mult *= dims[k];
+  }
+  return idx;
+}
+
+// ==========================================================
+// Lookup: precomputed exp table for speed (ratio -> exp(-ratio))
+// ratio here = (patchDist2) / h^2
+// ==========================================================
+struct Lookup {
+  std::vector<double> exp_table;
+  double step_ratio;
+  int n_ratio;
+  int smband;
+
+  Lookup(double maxRatio, int nSteps, int smband_)
+    : step_ratio(nSteps > 1 ? maxRatio / (nSteps - 1) : 1.0),
+      n_ratio(std::max(1, nSteps)),
+      smband(smband_) {
+    exp_table.resize(n_ratio);
+    for (int i = 0; i < n_ratio; ++i)
+      exp_table[i] = std::exp(-(i * step_ratio));
+  }
+
+  inline double getExp(double ratio) const {
+    if (ratio <= 0.0) return 1.0;
+    if (step_ratio <= 0.0) return std::exp(-ratio);
+    int idx = (int)(ratio / step_ratio);
+    if (idx < 0) idx = 0;
+    if (idx >= n_ratio) idx = n_ratio - 1;
+    return exp_table[idx];
+  }
+};
+
+// ==========================================================
+// PatchDatabase: flattened patches and norms (contiguous layout)
+// Uses the same ravel_index linearization as rest of code.
+// ==========================================================
+struct PatchDatabase {
+  std::vector<double> patches; // size N * patchSize; patch k for pixel i at patches[i*patchSize + k]
+  std::vector<double> norms;   // size N, sum of squares of patch entries
+  int patchRadius;
+  std::vector<int> dims;       // dims vector (same as dims_vec)
+  int patchSize;
+  int N;
+
+  PatchDatabase(const RVector<double>& img,
+                const std::vector<int>& dims_vec,
+                int patchRadius_)
+    : patchRadius(patchRadius_), dims(dims_vec) {
+    if (dims.size() < 2) stop("PatchDatabase expects dims to be at least 2D");
+    // compute N as product of dims
+    N = 1;
+    for (size_t i = 0; i < dims.size(); ++i) N *= dims[i];
+    patchSize = 1;
+    for (int d = 0; d < 2; ++d) // we treat 2D patches (first two dims)
+      patchSize *= (2 * patchRadius + 1);
+
+    patches.assign((size_t)N * patchSize, 0.0);
+    norms.assign(N, 0.0);
+
+    // Build patches using ravel_index mapping (column-major style)
+    std::vector<int> coords(dims.size());
+    for (int lin = 0; lin < N; ++lin) {
+      // compute multi-dim coords (inverse ravel_index)
+      int rem = lin;
+      for (size_t d = 0; d < dims.size(); ++d) {
+        coords[d] = rem % dims[d];
+        rem /= dims[d];
+      }
+      // For 2D patch (use dims[0]=H, dims[1]=W). coords[0]=row, coords[1]=col
+      int k = 0;
+      double sumSq = 0.0;
+      for (int dy = -patchRadius; dy <= patchRadius; ++dy) {
+        for (int dx = -patchRadius; dx <= patchRadius; ++dx) {
+          std::vector<int> pn = coords;
+          pn[0] += dy; pn[1] += dx;
+          // clamp to image
+          if (pn[0] < 0) pn[0] = 0;
+          if (pn[0] >= dims[0]) pn[0] = dims[0]-1;
+          if (pn[1] < 0) pn[1] = 0;
+          if (pn[1] >= dims[1]) pn[1] = dims[1]-1;
+          int lin_p = ravel_index(pn, dims);
+          double v = img[lin_p];
+          patches[(size_t)lin * patchSize + k] = v;
+          sumSq += v * v;
+          ++k;
+        }
+      }
+      norms[lin] = sumSq;
+    }
+  }
+
+  inline double dot_patch(int i, int j) const {
+    const double* Pi = &patches[(size_t)i * patchSize];
+    const double* Pj = &patches[(size_t)j * patchSize];
+    double s = 0.0;
+    // unrolling could be applied, keep straightforward
+    for (int k = 0; k < patchSize; ++k) s += Pi[k] * Pj[k];
+    return s;
+  }
+
+  inline double distance2(int i, int j) const {
+    double d2 = norms[i] + norms[j] - 2.0 * dot_patch(i, j);
+    if (d2 < 0.0) return 0.0;
+    return d2;
+  }
+};
+
+// ==========================================================
+// PixelWorker (parallel) - optimized 2D neighbor loops using PatchDatabase
+// ==========================================================
+struct PixelWorker : public RcppParallel::Worker {
+  const RVector<double> img;
+  const std::vector<std::vector<int>>& pixel_coords;
+  const std::vector<int>& pixel_nodes;
+  const std::vector<int>& dims;
+  const Lookup& lookup;
+  const PatchDatabase& pdb;
+  RVector<double> output;
+  double h2; // h^2 used in ratio = pd2 / h^2
+
+  PixelWorker(const RVector<double>& img_,
+              const std::vector<std::vector<int>>& pixel_coords_,
+              const std::vector<int>& pixel_nodes_,
+              const std::vector<int>& dims_,
+              const Lookup& lookup_,
+              const PatchDatabase& pdb_,
+              NumericVector& output_,
+              double h2_)
+    : img(img_), pixel_coords(pixel_coords_), pixel_nodes(pixel_nodes_),
+      dims(dims_), lookup(lookup_), pdb(pdb_), output(output_), h2(h2_) {}
+
+  void operator()(std::size_t begin, std::size_t end) {
+    const double eps = 1e-14;
+    if (dims.size() < 2) {
+      for (std::size_t idx = begin; idx < end; ++idx) output[idx] = img[idx];
+      return;
+    }
+
+    int H = dims[0];
+    int W = dims[1];
+
+    for (std::size_t lin = begin; lin < end; ++lin) {
+      const auto& ci = pixel_coords[lin];
+      int node_id = pixel_nodes[lin];
+      double centerVal = img[lin];
+
+      double temp = 0.0;
+      double count = 0.0;
+
+      int y = ci[0];
+      int x = ci[1];
+
+      int y0 = std::max(0, y - lookup.smband);
+      int y1 = std::min(H - 1, y + lookup.smband);
+      int x0 = std::max(0, x - lookup.smband);
+      int x1 = std::min(W - 1, x + lookup.smband);
+
+      for (int yy = y0; yy <= y1; ++yy) {
+        for (int xx = x0; xx <= x1; ++xx) {
+          std::vector<int> neigh = {yy, xx};
+          int lin_j = ravel_index(neigh, dims);
+          if (lin_j == (int)lin) continue;
+          if (pixel_nodes[lin_j] != node_id) continue;
+
+          double pd2 = pdb.distance2((int)lin, lin_j);
+          if (pd2 <= eps) continue;
+
+          double ratio = pd2 / h2; // as in NLM: exp(-pd2/h^2)
+          double wt = lookup.getExp(ratio);
+          if (wt < 1e-12) continue;
+
+          temp += img[lin_j] * wt;
+          count += wt;
+        }
+      } // neighbors
+
+      output[lin] = (count > 0.0 ? temp / count : centerVal);
+    } // lin
+  }
+};
+
+// ==========================================================
+// Exported function (keeps same name/signature)
+// [[Rcpp::export]]
+NumericVector TreetomatPixelSIMD(List tree,
+                                 NumericVector img,
+                                 IntegerVector dims,
+                                 double smband,
+                                 int nSteps = 10000) {
+  std::vector<int> dims_vec = as<std::vector<int>>(dims);
+  int N = std::accumulate(dims_vec.begin(), dims_vec.end(), 1, std::multiplies<int>());
+  if (img.size() != N) stop("Image size does not match dims");
+
+  NumericVector output(N);
+
+  // patch parameters (tuneable)
+  const int patchRadius = 1; // 1 -> 3x3 patch; increase for larger patches
+  int patchSize = (2*patchRadius + 1) * (2*patchRadius + 1);
+
+  // estimate image range
+  double imgMin = *std::min_element(img.begin(), img.end());
+  double imgMax = *std::max_element(img.begin(), img.end());
+
+  // heuristic for h: scale with image range and patch size
+  double h = 0.6 * (imgMax - imgMin) * std::sqrt((double)patchSize);
+  if (h <= 0.0) h = 1.0;
+  double h2 = h*h;
+
+  // maximum patchDist2 approx = patchSize * (imgMax - imgMin)^2
+  double maxPatchDist2 = (double)patchSize * (imgMax - imgMin) * (imgMax - imgMin);
+  double maxRatio = maxPatchDist2 / h2;
+  if (maxRatio <= 0.0) maxRatio = 1.0;
+
+  Lookup lookup(maxRatio, nSteps, (int)std::ceil(smband));
+
+  // Precompute pixel coords & node assignments (same as your original)
+  std::vector<std::vector<int>> pixel_coords(N);
+  std::vector<int> pixel_nodes(N, -1);
+
+  for (int nodeIdx = 0; nodeIdx < tree.size(); ++nodeIdx) {
+    List node = tree[nodeIdx];
+    IntegerMatrix node_coords = node["coord"];
+    for (int i = 0; i < node_coords.nrow(); ++i) {
+      std::vector<int> coords(dims_vec.size());
+      for (size_t d = 0; d < dims_vec.size(); ++d)
+        coords[d] = node_coords(i, d+1) - 1;
+      int lin_idx = ravel_index(coords, dims_vec);
+      pixel_coords[lin_idx] = coords;
+      pixel_nodes[lin_idx] = nodeIdx;
+    }
+  }
+
+  // Fallback assign unassigned pixels
+  for (int idx = 0; idx < N; ++idx) {
+    if (pixel_nodes[idx] == -1) {
+      if (pixel_coords[idx].empty()) {
+        std::vector<int> coords(dims_vec.size());
+        int rem = idx;
+        for (size_t d = 0; d < dims_vec.size(); ++d) {
+          coords[d] = rem % dims_vec[d];
+          rem /= dims_vec[d];
+        }
+        pixel_coords[idx] = coords;
+      }
+      pixel_nodes[idx] = idx;
+    }
+  }
+
+  // Wrap NumericVector as RVector for PatchDatabase
+  RVector<double> imgR(img);
+  PatchDatabase pdb(imgR, dims_vec, patchRadius);
+
+  // Create worker and run parallelFor
+  PixelWorker worker(imgR, pixel_coords, pixel_nodes, dims_vec, lookup, pdb, output, h2);
+  parallelFor(0, N, worker);
+
+  return output;
+}
