@@ -13,7 +13,7 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 
 // gettree_cpp
 List gettree_cpp(arma::vec y, arma::mat X, double minlossimprove, int minsize);
-RcppExport SEXP _dentree_gettree_cpp(SEXP ySEXP, SEXP XSEXP, SEXP minlossimproveSEXP, SEXP minsizeSEXP) {
+RcppExport SEXP _ORTdenoise_gettree_cpp(SEXP ySEXP, SEXP XSEXP, SEXP minlossimproveSEXP, SEXP minsizeSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -27,7 +27,7 @@ END_RCPP
 }
 // TreetomatPixelSIMD
 NumericVector TreetomatPixelSIMD(List tree, NumericVector img, IntegerVector dims, double smband, int nSteps);
-RcppExport SEXP _dentree_TreetomatPixelSIMD(SEXP treeSEXP, SEXP imgSEXP, SEXP dimsSEXP, SEXP smbandSEXP, SEXP nStepsSEXP) {
+RcppExport SEXP _ORTdenoise_TreetomatPixelSIMD(SEXP treeSEXP, SEXP imgSEXP, SEXP dimsSEXP, SEXP smbandSEXP, SEXP nStepsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -42,7 +42,7 @@ END_RCPP
 }
 // ssim
 double ssim(SEXP img1_, SEXP img2_, double K1, double K2, int win_size);
-RcppExport SEXP _dentree_ssim(SEXP img1_SEXP, SEXP img2_SEXP, SEXP K1SEXP, SEXP K2SEXP, SEXP win_sizeSEXP) {
+RcppExport SEXP _ORTdenoise_ssim(SEXP img1_SEXP, SEXP img2_SEXP, SEXP K1SEXP, SEXP K2SEXP, SEXP win_sizeSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -57,13 +57,13 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_dentree_gettree_cpp", (DL_FUNC) &_dentree_gettree_cpp, 4},
-    {"_dentree_TreetomatPixelSIMD", (DL_FUNC) &_dentree_TreetomatPixelSIMD, 5},
-    {"_dentree_ssim", (DL_FUNC) &_dentree_ssim, 5},
+    {"_ORTdenoise_gettree_cpp", (DL_FUNC) &_ORTdenoise_gettree_cpp, 4},
+    {"_ORTdenoise_TreetomatPixelSIMD", (DL_FUNC) &_ORTdenoise_TreetomatPixelSIMD, 5},
+    {"_ORTdenoise_ssim", (DL_FUNC) &_ORTdenoise_ssim, 5},
     {NULL, NULL, 0}
 };
 
-RcppExport void R_init_dentree(DllInfo *dll) {
+RcppExport void R_init_ORTdenoise(DllInfo *dll) {
     R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
     R_useDynamicSymbols(dll, FALSE);
 }

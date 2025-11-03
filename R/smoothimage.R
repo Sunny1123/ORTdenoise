@@ -1,4 +1,14 @@
+
+#' Title smoothimage
+#'
+#' @param img Image to be denoised
+#' @param minlossimprove cutoff for branching
+#' @param smband smoothing band
+#'
+#' @returns smoothed image, and decision tree
 #' @export
+#'
+#' @examples smoothimage(img,0,0001,4)
 smoothimage <- function(img, minlossimprove = 0.0001, smband = 4) {
   if(max(img>10)) scale_factor=255 else scale_factor=1
   img=img/scale_factor

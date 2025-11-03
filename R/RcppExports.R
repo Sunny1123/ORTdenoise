@@ -2,14 +2,14 @@
 # Generator token: 10BE3573-1514-4C36-9D1C-5A225CD40393
 
 gettree_cpp <- function(y, X, minlossimprove = 0.01, minsize = 1L) {
-    .Call(`_dentree_gettree_cpp`, y, X, minlossimprove, minsize)
+    .Call(`_ORTdenoise_gettree_cpp`, y, X, minlossimprove, minsize)
 }
 
 TreetomatPixelSIMD <- function(tree, img, dims, smband, nSteps = 10000L) {
-    .Call(`_dentree_TreetomatPixelSIMD`, tree, img, dims, smband, nSteps)
+    .Call(`_ORTdenoise_TreetomatPixelSIMD`, tree, img, dims, smband, nSteps)
 }
 
 ssim <- function(img1_, img2_, K1 = 0.01, K2 = 0.03, win_size = 7L) {
-    .Call(`_dentree_ssim`, img1_, img2_, K1, K2, win_size)
+    .Call(`_ORTdenoise_ssim`, img1_, img2_, K1, K2, win_size)
 }
 
