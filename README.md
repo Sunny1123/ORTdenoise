@@ -197,6 +197,7 @@ smoothimage(img, minlossimprove = 1e-04, smband = 4)
 
 - **smband**: smoothing band
 
+- **mode**: mode 1 uses the c implementation which is faster but use approximations, 2 uses the R implemetation but does not work on 3d mages
 ### Value
 
 smoothed image, and decision tree
@@ -207,6 +208,6 @@ Title smoothimage
 ### Examples
 ```r
 
-smoothimage(img,0,0001,4)
+smoothimage(img,0,0001,4,1)
 
 ```
