@@ -185,7 +185,7 @@ demo3diter(image=128,sigma=0.1,smband=4,tolmult=0.01,margin=0.05,slice_idx=NULL,
 **Usage:**
 ```
 
-smoothimage(img, minlossimprove = 1e-04, smband = 4)
+smoothimage(img, minlossimprove = 1e-04, smband = 4, mode =1)
 
 ```
 
